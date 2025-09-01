@@ -1,0 +1,887 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gridpoint</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Orbitron', sans-serif;
+            background-color: #0c0a09;
+            color: #d1d5db;
+        }
+        .bg-gradient-royal {
+            background: linear-gradient(to right, #001f3f, #31004a, #5c0032);
+        }
+        .bg-gradient-item {
+            background: linear-gradient(to bottom, #1f2937, #111827);
+        }
+        .glass-morphism {
+            background: rgba(17, 24, 39, 0.7);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border: 1px solid rgba(75, 85, 99, 0.3);
+        }
+        .btn-futuristic {
+            background: linear-gradient(45deg, #4f46e5, #9333ea);
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        .btn-futuristic:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 8px rgba(0, 0, 0, 0.4);
+        }
+        input, select, textarea {
+            background-color: #1f2937;
+            border-color: #4b5563;
+        }
+        .modal {
+            background: rgba(0, 0, 0, 0.7);
+        }
+        .scroll-container::-webkit-scrollbar {
+            width: 8px;
+        }
+        .scroll-container::-webkit-scrollbar-track {
+            background: #1f2937;
+        }
+        .scroll-container::-webkit-scrollbar-thumb {
+            background-color: #4f46e5;
+            border-radius: 20px;
+            border: 2px solid #1f2937;
+        }
+        .bg-grid {
+            background-image: 
+                linear-gradient(0deg, transparent 24%, rgba(79, 70, 229, 0.1) 25%, rgba(79, 70, 229, 0.1) 26%, transparent 27%),
+                linear-gradient(90deg, transparent 24%, rgba(79, 70, 229, 0.1) 25%, rgba(79, 70, 229, 0.1) 26%, transparent 27%);
+            background-size: 50px 50px;
+        }
+    </style>
+</head>
+<body class="bg-gradient-royal min-h-screen flex text-gray-200">
+
+    <!-- Firebase SDKs -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, getDoc, addDoc, setDoc, updateDoc, deleteDoc, onSnapshot, collection, query, where, getDocs, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Firebase Initialization
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+        let app, auth, db, userId;
+
+        function initFirebase() {
+            try {
+                if (Object.keys(firebaseConfig).length > 0) {
+                    app = initializeApp(firebaseConfig);
+                    auth = getAuth(app);
+                    db = getFirestore(app);
+                    setLogLevel('debug'); // Enable debug logging for Firestore
+                    console.log("Firebase initialized.");
+                } else {
+                    console.error("Firebase config is missing.");
+                }
+            } catch (error) {
+                console.error("Error initializing Firebase:", error);
+            }
+        }
+        initFirebase();
+
+        // Auth State Listener
+        onAuthStateChanged(auth, async (user) => {
+            if (user) {
+                userId = user.uid;
+                document.getElementById('user-id-display').innerText = `User ID: ${userId}`;
+                console.log("User authenticated:", userId);
+                await renderDashboard(); // Render main dashboard after auth
+            } else {
+                console.log("No user authenticated. Signing in...");
+                try {
+                    if (initialAuthToken) {
+                        await signInWithCustomToken(auth, initialAuthToken);
+                        console.log("Signed in with custom token.");
+                    } else {
+                        await signInAnonymously(auth);
+                        console.log("Signed in anonymously.");
+                    }
+                } catch (error) {
+                    console.error("Authentication error:", error);
+                }
+            }
+        });
+
+        // Global state and navigation
+        const state = {
+            currentPage: 'dashboard',
+            customerModule: {
+                activeCustomer: null,
+                searchQuery: ''
+            },
+            inventoryModule: {
+                activeProduct: null,
+                searchQuery: ''
+            },
+            tradeModule: {
+                activeTrade: null
+            },
+            history: []
+        };
+
+        const pageContent = document.getElementById('page-content');
+        const modal = document.getElementById('app-modal');
+        const modalText = document.getElementById('modal-text');
+        const modalConfirmBtn = document.getElementById('modal-confirm');
+        const modalCancelBtn = document.getElementById('modal-cancel');
+
+        function showModal(message, isConfirm = false) {
+            modalText.innerText = message;
+            modalConfirmBtn.classList.add('hidden');
+            modalCancelBtn.classList.add('hidden');
+            if (isConfirm) {
+                modalConfirmBtn.classList.remove('hidden');
+                modalCancelBtn.classList.remove('hidden');
+            }
+            modal.classList.remove('hidden');
+            return new Promise(resolve => {
+                modalConfirmBtn.onclick = () => {
+                    modal.classList.add('hidden');
+                    resolve(true);
+                };
+                modalCancelBtn.onclick = () => {
+                    modal.classList.add('hidden');
+                    resolve(false);
+                };
+            });
+        }
+
+        async function navigateTo(page, data = {}) {
+            state.history.push({ page: state.currentPage, data: state[state.currentPage] });
+            state.currentPage = page;
+            state[page] = { ...state[page], ...data };
+            switch(page) {
+                case 'dashboard':
+                    await renderDashboard();
+                    break;
+                case 'customers':
+                    await renderCustomersModule();
+                    break;
+                case 'inventory':
+                    await renderInventoryModule();
+                    break;
+                case 'trade_center':
+                    await renderTradeCenterModule();
+                    break;
+                default:
+                    renderPlaceholder(page);
+                    break;
+            }
+        }
+
+        function goBack() {
+            if (state.history.length > 0) {
+                const prevPage = state.history.pop();
+                state.currentPage = prevPage.page;
+                state[prevPage.page] = prevPage.data;
+                navigateTo(state.currentPage, prevPage.data);
+            }
+        }
+
+        // --- Module Rendering Functions ---
+        async function renderDashboard() {
+            pageContent.innerHTML = `
+                <div class="p-8 space-y-8 flex flex-col items-center justify-center h-full bg-grid">
+                    <h1 class="text-4xl md:text-5xl font-bold text-center text-purple-400">Welcome to the Dashboard</h1>
+                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 w-full max-w-5xl">
+                        <button onclick="navigateTo('customers')" class="btn-futuristic p-6 rounded-2xl flex flex-col items-center transform transition-transform hover:scale-105">
+                            <i class="fas fa-users text-4xl mb-2 text-purple-200"></i>
+                            <span class="text-lg">Customers</span>
+                        </button>
+                        <button onclick="navigateTo('orders')" class="btn-futuristic p-6 rounded-2xl flex flex-col items-center transform transition-transform hover:scale-105">
+                            <i class="fas fa-shopping-cart text-4xl mb-2 text-purple-200"></i>
+                            <span class="text-lg">Orders</span>
+                        </button>
+                        <button onclick="navigateTo('trade_center')" class="btn-futuristic p-6 rounded-2xl flex flex-col items-center transform transition-transform hover:scale-105">
+                            <i class="fas fa-exchange-alt text-4xl mb-2 text-purple-200"></i>
+                            <span class="text-lg">Trade Center</span>
+                        </button>
+                        <button onclick="navigateTo('employee_center')" class="btn-futuristic p-6 rounded-2xl flex flex-col items-center transform transition-transform hover:scale-105">
+                            <i class="fas fa-id-card-alt text-4xl mb-2 text-purple-200"></i>
+                            <span class="text-lg">Employee Center</span>
+                        </button>
+                        <button onclick="navigateTo('inventory')" class="btn-futuristic p-6 rounded-2xl flex flex-col items-center transform transition-transform hover:scale-105">
+                            <i class="fas fa-box-open text-4xl mb-2 text-purple-200"></i>
+                            <span class="text-lg">Inventory</span>
+                        </button>
+                        <button onclick="navigateTo('reports')" class="btn-futuristic p-6 rounded-2xl flex flex-col items-center transform transition-transform hover:scale-105">
+                            <i class="fas fa-chart-line text-4xl mb-2 text-purple-200"></i>
+                            <span class="text-lg">Reports</span>
+                        </button>
+                    </div>
+                </div>
+            `;
+        }
+
+        async function renderCustomersModule() {
+            pageContent.innerHTML = `
+                <div class="p-8 space-y-6">
+                    <div class="flex justify-between items-center">
+                        <h2 class="text-3xl font-bold text-purple-400">Customers</h2>
+                        <button onclick="goBack()" class="bg-gray-600 text-gray-200 py-2 px-4 rounded-full text-sm transition-transform transform hover:scale-105"><i class="fas fa-times"></i> Back</button>
+                    </div>
+                    <div class="flex flex-col md:flex-row gap-4 items-center">
+                        <button onclick="renderCustomerForm()" class="btn-futuristic py-2 px-6 rounded-lg text-lg"><i class="fas fa-plus mr-2"></i>Create New</button>
+                        <div class="flex items-center space-x-2 w-full md:w-auto">
+                            <input id="customer-search-input" type="text" placeholder="Search by name or phone..." class="flex-1 p-2 rounded-lg bg-gray-800 border border-gray-600 text-gray-300 focus:outline-none focus:border-purple-500">
+                            <button onclick="searchCustomers()" class="btn-futuristic py-2 px-6 rounded-lg text-lg"><i class="fas fa-search"></i></button>
+                        </div>
+                        <button onclick="showModal('Import functionality not implemented yet.')" class="btn-futuristic py-2 px-6 rounded-lg text-lg">Import</button>
+                    </div>
+                    <div id="customers-list" class="scroll-container h-96 overflow-y-auto">
+                        <p class="text-gray-400 text-center">Loading customers...</p>
+                    </div>
+                </div>
+            `;
+            const q = query(collection(db, `artifacts/${appId}/users/${userId}/customers`));
+            onSnapshot(q, (querySnapshot) => {
+                const customersList = document.getElementById('customers-list');
+                if (!customersList) return; // Prevent errors if the user navigates away
+                customersList.innerHTML = '';
+                if (querySnapshot.empty) {
+                    customersList.innerHTML = `<p class="text-center text-gray-500 mt-8">No customers found.</p>`;
+                } else {
+                    querySnapshot.forEach((doc) => {
+                        const customer = doc.data();
+                        customersList.innerHTML += `
+                            <div onclick="viewCustomer('${doc.id}')" class="bg-gray-800 glass-morphism p-4 rounded-xl mb-2 cursor-pointer transition-transform transform hover:scale-[1.01] hover:shadow-lg">
+                                <p class="text-lg font-bold">${customer.firstName} ${customer.lastName}</p>
+                                <p class="text-sm text-gray-400">${customer.phoneNumber}</p>
+                            </div>
+                        `;
+                    });
+                }
+            });
+        }
+
+        async function searchCustomers() {
+            const queryVal = document.getElementById('customer-search-input').value.toLowerCase();
+            const customersRef = collection(db, `artifacts/${appId}/users/${userId}/customers`);
+            let customersToDisplay = [];
+
+            if (!queryVal) {
+                renderCustomersModule();
+                return;
+            }
+
+            // Client-side search for flexibility
+            const allCustomers = await getDocs(customersRef);
+            allCustomers.forEach(doc => {
+                const customer = doc.data();
+                if (customer.firstName.toLowerCase().includes(queryVal) ||
+                    customer.lastName.toLowerCase().includes(queryVal) ||
+                    customer.phoneNumber.includes(queryVal)) {
+                    customersToDisplay.push({ id: doc.id, ...customer });
+                }
+            });
+
+            const customersList = document.getElementById('customers-list');
+            if (!customersList) return;
+            customersList.innerHTML = '';
+            if (customersToDisplay.length === 0) {
+                customersList.innerHTML = `<p class="text-center text-gray-500 mt-8">No matching customers found.</p>`;
+            } else {
+                customersToDisplay.forEach(customer => {
+                    customersList.innerHTML += `
+                        <div onclick="viewCustomer('${customer.id}')" class="bg-gray-800 glass-morphism p-4 rounded-xl mb-2 cursor-pointer transition-transform transform hover:scale-[1.01] hover:shadow-lg">
+                            <p class="text-lg font-bold">${customer.firstName} ${customer.lastName}</p>
+                            <p class="text-sm text-gray-400">${customer.phoneNumber}</p>
+                        </div>
+                    `;
+                });
+            }
+        }
+
+        async function renderCustomerForm(customerData = {}, customerId = null) {
+            pageContent.innerHTML = `
+                <div class="p-8 space-y-6">
+                    <div class="flex justify-between items-center">
+                        <h2 class="text-3xl font-bold text-purple-400">${customerId ? 'Edit Customer' : 'Create New Customer'}</h2>
+                        <button onclick="goBack()" class="bg-gray-600 text-gray-200 py-2 px-4 rounded-full text-sm transition-transform transform hover:scale-105"><i class="fas fa-times"></i> Back</button>
+                    </div>
+                    <form id="customer-form" class="space-y-4">
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <label class="block">
+                                <span class="text-gray-400">First Name</span>
+                                <input type="text" id="firstName" value="${customerData.firstName || ''}" class="form-input mt-1 block w-full rounded-lg" required>
+                            </label>
+                            <label class="block">
+                                <span class="text-gray-400">Last Name</span>
+                                <input type="text" id="lastName" value="${customerData.lastName || ''}" class="form-input mt-1 block w-full rounded-lg" required>
+                            </label>
+                            <label class="block md:col-span-2">
+                                <span class="text-gray-400">Address</span>
+                                <input type="text" id="address" value="${customerData.address || ''}" class="form-input mt-1 block w-full rounded-lg">
+                            </label>
+                            <label class="block">
+                                <span class="text-gray-400">Phone Number</span>
+                                <input type="tel" id="phoneNumber" value="${customerData.phoneNumber || ''}" class="form-input mt-1 block w-full rounded-lg" required>
+                            </label>
+                            <label class="block">
+                                <span class="text-gray-400">Email</span>
+                                <input type="email" id="email" value="${customerData.email || ''}" class="form-input mt-1 block w-full rounded-lg">
+                            </label>
+                            <label class="block">
+                                <span class="text-gray-400">Identity Type</span>
+                                <select id="identityType" class="form-select mt-1 block w-full rounded-lg">
+                                    <option value="Driver License" ${customerData.identityType === 'Driver License' ? 'selected' : ''}>Driver License</option>
+                                    <option value="State ID" ${customerData.identityType === 'State ID' ? 'selected' : ''}>State ID</option>
+                                    <option value="Passport" ${customerData.identityType === 'Passport' ? 'selected' : ''}>Passport</option>
+                                    <option value="Military ID" ${customerData.identityType === 'Military ID' ? 'selected' : ''}>Military ID</option>
+                                </select>
+                            </label>
+                            <label class="block">
+                                <span class="text-gray-400">Identification Number</span>
+                                <input type="text" id="idNumber" value="${customerData.idNumber || ''}" class="form-input mt-1 block w-full rounded-lg">
+                            </label>
+                            <label class="block">
+                                <span class="text-gray-400">Expiration Date</span>
+                                <input type="date" id="expDate" value="${customerData.expDate || ''}" class="form-input mt-1 block w-full rounded-lg">
+                            </label>
+                            <label class="block">
+                                <span class="text-gray-400">Date of Birth</span>
+                                <input type="date" id="dob" value="${customerData.dob || ''}" class="form-input mt-1 block w-full rounded-lg">
+                            </label>
+                            <label class="block">
+                                <span class="text-gray-400">Height (ft/in)</span>
+                                <input type="text" id="height" value="${customerData.height || ''}" class="form-input mt-1 block w-full rounded-lg">
+                            </label>
+                            <label class="block">
+                                <span class="text-gray-400">Weight (lbs)</span>
+                                <input type="number" id="weight" value="${customerData.weight || ''}" class="form-input mt-1 block w-full rounded-lg">
+                            </label>
+                            <label class="block">
+                                <span class="text-gray-400">Race</span>
+                                <input type="text" id="race" value="${customerData.race || ''}" class="form-input mt-1 block w-full rounded-lg">
+                            </label>
+                        </div>
+                        <div class="flex space-x-4">
+                            <button type="submit" class="btn-futuristic py-2 px-6 rounded-lg text-lg">${customerId ? 'Save Changes' : 'Create Customer'}</button>
+                            <button type="button" onclick="goBack()" class="bg-gray-600 text-gray-200 py-2 px-6 rounded-lg text-lg transition-transform transform hover:scale-105"><i class="fas fa-times mr-2"></i>Back</button>
+                        </div>
+                    </form>
+                </div>
+            `;
+
+            document.getElementById('customer-form').onsubmit = async (e) => {
+                e.preventDefault();
+                const newCustomer = {
+                    firstName: document.getElementById('firstName').value,
+                    lastName: document.getElementById('lastName').value,
+                    address: document.getElementById('address').value,
+                    phoneNumber: document.getElementById('phoneNumber').value,
+                    email: document.getElementById('email').value,
+                    identityType: document.getElementById('identityType').value,
+                    idNumber: document.getElementById('idNumber').value,
+                    expDate: document.getElementById('expDate').value,
+                    dob: document.getElementById('dob').value,
+                    height: document.getElementById('height').value,
+                    weight: document.getElementById('weight').value,
+                    race: document.getElementById('race').value,
+                    createdAt: new Date()
+                };
+
+                try {
+                    if (customerId) {
+                        const customerRef = doc(db, `artifacts/${appId}/users/${userId}/customers`, customerId);
+                        await setDoc(customerRef, newCustomer);
+                        showModal('Customer updated successfully!');
+                    } else {
+                        await addDoc(collection(db, `artifacts/${appId}/users/${userId}/customers`), newCustomer);
+                        showModal('Customer created successfully!');
+                    }
+                    goBack();
+                } catch (error) {
+                    console.error("Error saving customer: ", error);
+                    showModal('Error saving customer. See console for details.');
+                }
+            };
+        }
+
+        async function viewCustomer(customerId) {
+            const customerRef = doc(db, `artifacts/${appId}/users/${userId}/customers`, customerId);
+            const customerSnap = await getDoc(customerRef);
+            if (!customerSnap.exists()) {
+                showModal("Customer not found.");
+                goBack();
+                return;
+            }
+            const customer = customerSnap.data();
+            state.customerModule.activeCustomer = { id: customerId, ...customer };
+
+            pageContent.innerHTML = `
+                <div class="p-8 space-y-6">
+                    <div class="flex justify-between items-center">
+                        <h2 class="text-3xl font-bold text-purple-400">Customer Profile</h2>
+                        <button onclick="goBack()" class="bg-gray-600 text-gray-200 py-2 px-4 rounded-full text-sm transition-transform transform hover:scale-105"><i class="fas fa-times"></i> Back</button>
+                    </div>
+                    <div class="bg-gray-800 glass-morphism p-6 rounded-xl space-y-4">
+                        <p><strong>Name:</strong> ${customer.firstName} ${customer.lastName}</p>
+                        <p><strong>Address:</strong> ${customer.address || 'N/A'}</p>
+                        <p><strong>Phone:</strong> ${customer.phoneNumber || 'N/A'}</p>
+                        <p><strong>Email:</strong> ${customer.email || 'N/A'}</p>
+                        <p><strong>ID Type:</strong> ${customer.identityType || 'N/A'}</p>
+                        <p><strong>ID #:</strong> ${customer.idNumber || 'N/A'}</p>
+                        <p><strong>DOB:</strong> ${customer.dob || 'N/A'}</p>
+                        <p><strong>Height:</strong> ${customer.height || 'N/A'}</p>
+                        <p><strong>Weight:</strong> ${customer.weight || 'N/A'}</p>
+                        <p><strong>Race:</strong> ${customer.race || 'N/A'}</p>
+                    </div>
+                    <div class="flex space-x-4">
+                        <button onclick="renderCustomerForm(state.customerModule.activeCustomer, state.customerModule.activeCustomer.id)" class="btn-futuristic py-2 px-6 rounded-lg text-lg">Edit</button>
+                        <button onclick="deleteCustomer('${customerId}')" class="bg-red-600 text-gray-200 py-2 px-6 rounded-lg text-lg transition-transform transform hover:scale-105">Delete</button>
+                        <button onclick="showModal('File attachment feature not implemented yet.')" class="bg-blue-600 text-gray-200 py-2 px-6 rounded-lg text-lg transition-transform transform hover:scale-105">Attach Files</button>
+                        <button onclick="showModal('Customer history feature not implemented yet.')" class="bg-blue-600 text-gray-200 py-2 px-6 rounded-lg text-lg transition-transform transform hover:scale-105">View History</button>
+                    </div>
+                </div>
+            `;
+        }
+
+        async function deleteCustomer(customerId) {
+            const confirmed = await showModal('Are you sure you want to delete this customer?', true);
+            if (confirmed) {
+                try {
+                    await deleteDoc(doc(db, `artifacts/${appId}/users/${userId}/customers`, customerId));
+                    showModal('Customer deleted successfully!');
+                    goBack();
+                } catch (error) {
+                    console.error("Error deleting customer: ", error);
+                    showModal('Error deleting customer. See console for details.');
+                }
+            }
+        }
+
+        async function renderInventoryModule() {
+            pageContent.innerHTML = `
+                <div class="p-8 space-y-6">
+                    <div class="flex justify-between items-center">
+                        <h2 class="text-3xl font-bold text-purple-400">Inventory</h2>
+                        <button onclick="goBack()" class="bg-gray-600 text-gray-200 py-2 px-4 rounded-full text-sm transition-transform transform hover:scale-105"><i class="fas fa-times"></i> Back</button>
+                    </div>
+                    <div class="flex flex-wrap gap-4 items-center">
+                        <button onclick="renderProductForm()" class="btn-futuristic py-2 px-6 rounded-lg text-lg"><i class="fas fa-plus mr-2"></i>Create New Product</button>
+                        <div class="flex items-center space-x-2 flex-1 min-w-[200px]">
+                            <input id="inventory-search-input" type="text" placeholder="Search by name, SKU, UPC..." class="flex-1 p-2 rounded-lg bg-gray-800 border border-gray-600 text-gray-300 focus:outline-none focus:border-purple-500">
+                            <button onclick="searchInventory()" class="btn-futuristic py-2 px-6 rounded-lg text-lg"><i class="fas fa-search"></i></button>
+                        </div>
+                        <button onclick="showModal('Functionality not implemented yet.')" class="btn-futuristic py-2 px-6 rounded-lg text-lg">Process New</button>
+                        <button onclick="showModal('Functionality not implemented yet.')" class="btn-futuristic py-2 px-6 rounded-lg text-lg">Remove Item</button>
+                        <button onclick="showModal('Functionality not implemented yet.')" class="btn-futuristic py-2 px-6 rounded-lg text-lg">Reports</button>
+                        <button onclick="showModal('Functionality not implemented yet.')" class="btn-futuristic py-2 px-6 rounded-lg text-lg">Physical Count</button>
+                    </div>
+                    <div id="inventory-list" class="scroll-container h-96 overflow-y-auto">
+                        <p class="text-gray-400 text-center">Loading inventory...</p>
+                    </div>
+                </div>
+            `;
+            const q = query(collection(db, `artifacts/${appId}/users/${userId}/inventory`));
+            onSnapshot(q, (querySnapshot) => {
+                const inventoryList = document.getElementById('inventory-list');
+                if (!inventoryList) return;
+                inventoryList.innerHTML = '';
+                if (querySnapshot.empty) {
+                    inventoryList.innerHTML = `<p class="text-center text-gray-500 mt-8">No inventory items found.</p>`;
+                } else {
+                    querySnapshot.forEach((doc) => {
+                        const item = doc.data();
+                        inventoryList.innerHTML += `
+                            <div onclick="viewProduct('${doc.id}')" class="bg-gray-800 glass-morphism p-4 rounded-xl mb-2 cursor-pointer transition-transform transform hover:scale-[1.01] hover:shadow-lg">
+                                <p class="text-lg font-bold">${item.itemName}</p>
+                                <p class="text-sm text-gray-400">SKU: ${item.sku}</p>
+                            </div>
+                        `;
+                    });
+                }
+            });
+        }
+
+        async function searchInventory() {
+            const queryVal = document.getElementById('inventory-search-input').value.toLowerCase();
+            const inventoryRef = collection(db, `artifacts/${appId}/users/${userId}/inventory`);
+            let itemsToDisplay = [];
+
+            if (!queryVal) {
+                renderInventoryModule();
+                return;
+            }
+
+            const allItems = await getDocs(inventoryRef);
+            allItems.forEach(doc => {
+                const item = doc.data();
+                if (item.itemName.toLowerCase().includes(queryVal) ||
+                    item.sku.toLowerCase().includes(queryVal) ||
+                    item.upc.toLowerCase().includes(queryVal) ||
+                    item.vendor.toLowerCase().includes(queryVal) ||
+                    item.category.toLowerCase().includes(queryVal) ||
+                    item.subCategory.toLowerCase().includes(queryVal)) {
+                    itemsToDisplay.push({ id: doc.id, ...item });
+                }
+            });
+
+            const inventoryList = document.getElementById('inventory-list');
+            if (!inventoryList) return;
+            inventoryList.innerHTML = '';
+            if (itemsToDisplay.length === 0) {
+                inventoryList.innerHTML = `<p class="text-center text-gray-500 mt-8">No matching items found.</p>`;
+            } else {
+                itemsToDisplay.forEach(item => {
+                    inventoryList.innerHTML += `
+                        <div onclick="viewProduct('${item.id}')" class="bg-gray-800 glass-morphism p-4 rounded-xl mb-2 cursor-pointer transition-transform transform hover:scale-[1.01] hover:shadow-lg">
+                            <p class="text-lg font-bold">${item.itemName}</p>
+                            <p class="text-sm text-gray-400">SKU: ${item.sku}</p>
+                        </div>
+                    `;
+                });
+            }
+        }
+
+        async function renderProductForm(productData = {}, productId = null) {
+            pageContent.innerHTML = `
+                <div class="p-8 space-y-6">
+                    <div class="flex justify-between items-center">
+                        <h2 class="text-3xl font-bold text-purple-400">${productId ? 'Edit Product' : 'Create New Product'}</h2>
+                        <button onclick="goBack()" class="bg-gray-600 text-gray-200 py-2 px-4 rounded-full text-sm transition-transform transform hover:scale-105"><i class="fas fa-times"></i> Back</button>
+                    </div>
+                    <form id="product-form" class="space-y-4">
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <label class="block">
+                                <span class="text-gray-400">Item Name</span>
+                                <input type="text" id="itemName" value="${productData.itemName || ''}" class="form-input mt-1 block w-full rounded-lg" required>
+                            </label>
+                            <label class="block">
+                                <span class="text-gray-400">Category</span>
+                                <input type="text" id="category" value="${productData.category || ''}" class="form-input mt-1 block w-full rounded-lg">
+                            </label>
+                            <label class="block">
+                                <span class="text-gray-400">Sub Category</span>
+                                <input type="text" id="subCategory" value="${productData.subCategory || ''}" class="form-input mt-1 block w-full rounded-lg">
+                            </label>
+                            <label class="block">
+                                <span class="text-gray-400">Cost</span>
+                                <input type="number" id="cost" value="${productData.cost || ''}" class="form-input mt-1 block w-full rounded-lg">
+                            </label>
+                            <label class="block">
+                                <span class="text-gray-400">Sale Price</span>
+                                <input type="number" id="salePrice" value="${productData.salePrice || ''}" class="form-input mt-1 block w-full rounded-lg">
+                            </label>
+                            <label class="block">
+                                <span class="text-gray-400">Trade Value (Cash)</span>
+                                <input type="number" id="tradeCash" value="${productData.tradeCash || ''}" class="form-input mt-1 block w-full rounded-lg">
+                            </label>
+                            <label class="block">
+                                <span class="text-gray-400">Trade Value (Credit)</span>
+                                <input type="number" id="tradeCredit" value="${productData.tradeCredit || ''}" class="form-input mt-1 block w-full rounded-lg">
+                            </label>
+                            <label class="block">
+                                <span class="text-gray-400">Vendor</span>
+                                <input type="text" id="vendor" value="${productData.vendor || ''}" class="form-input mt-1 block w-full rounded-lg">
+                            </label>
+                            <label class="block">
+                                <span class="text-gray-400">SKU</span>
+                                <input type="text" id="sku" value="${productData.sku || ''}" class="form-input mt-1 block w-full rounded-lg">
+                            </label>
+                            <label class="block">
+                                <span class="text-gray-400">UPC</span>
+                                <input type="text" id="upc" value="${productData.upc || ''}" class="form-input mt-1 block w-full rounded-lg">
+                            </label>
+                            <label class="block">
+                                <span class="text-gray-400">Condition</span>
+                                <input type="text" id="condition" value="${productData.condition || ''}" class="form-input mt-1 block w-full rounded-lg">
+                            </label>
+                            <label class="block">
+                                <span class="text-gray-400">Shipping Profile</span>
+                                <input type="text" id="shippingProfile" value="${productData.shippingProfile || ''}" class="form-input mt-1 block w-full rounded-lg">
+                            </label>
+                            <label class="block md:col-span-2">
+                                <span class="text-gray-400">Item Description</span>
+                                <textarea id="itemDescription" class="form-textarea mt-1 block w-full rounded-lg">${productData.itemDescription || ''}</textarea>
+                            </label>
+                        </div>
+                        <div class="flex space-x-4">
+                            <button type="submit" class="btn-futuristic py-2 px-6 rounded-lg text-lg">${productId ? 'Save Changes' : 'Create Product'}</button>
+                            <button type="button" onclick="goBack()" class="bg-gray-600 text-gray-200 py-2 px-6 rounded-lg text-lg transition-transform transform hover:scale-105"><i class="fas fa-times mr-2"></i>Back</button>
+                        </div>
+                    </form>
+                </div>
+            `;
+
+            document.getElementById('product-form').onsubmit = async (e) => {
+                e.preventDefault();
+                const newProduct = {
+                    itemName: document.getElementById('itemName').value,
+                    category: document.getElementById('category').value,
+                    subCategory: document.getElementById('subCategory').value,
+                    itemDescription: document.getElementById('itemDescription').value,
+                    cost: parseFloat(document.getElementById('cost').value) || 0,
+                    salePrice: parseFloat(document.getElementById('salePrice').value) || 0,
+                    tradeCash: parseFloat(document.getElementById('tradeCash').value) || 0,
+                    tradeCredit: parseFloat(document.getElementById('tradeCredit').value) || 0,
+                    vendor: document.getElementById('vendor').value,
+                    sku: document.getElementById('sku').value,
+                    upc: document.getElementById('upc').value,
+                    condition: document.getElementById('condition').value,
+                    shippingProfile: document.getElementById('shippingProfile').value
+                };
+
+                try {
+                    if (productId) {
+                        const productRef = doc(db, `artifacts/${appId}/users/${userId}/inventory`, productId);
+                        await setDoc(productRef, newProduct);
+                        showModal('Product updated successfully!');
+                    } else {
+                        await addDoc(collection(db, `artifacts/${appId}/users/${userId}/inventory`), newProduct);
+                        showModal('Product created successfully!');
+                    }
+                    goBack();
+                } catch (error) {
+                    console.error("Error saving product: ", error);
+                    showModal('Error saving product. See console for details.');
+                }
+            };
+        }
+
+        async function viewProduct(productId) {
+            const productRef = doc(db, `artifacts/${appId}/users/${userId}/inventory`, productId);
+            const productSnap = await getDoc(productRef);
+            if (!productSnap.exists()) {
+                showModal("Product not found.");
+                goBack();
+                return;
+            }
+            const product = productSnap.data();
+            state.inventoryModule.activeProduct = { id: productId, ...product };
+
+            pageContent.innerHTML = `
+                <div class="p-8 space-y-6">
+                    <div class="flex justify-between items-center">
+                        <h2 class="text-3xl font-bold text-purple-400">Product Profile</h2>
+                        <button onclick="goBack()" class="bg-gray-600 text-gray-200 py-2 px-4 rounded-full text-sm transition-transform transform hover:scale-105"><i class="fas fa-times"></i> Back</button>
+                    </div>
+                    <div class="bg-gray-800 glass-morphism p-6 rounded-xl space-y-4">
+                        <p><strong>Item Name:</strong> ${product.itemName}</p>
+                        <p><strong>Category:</strong> ${product.category || 'N/A'}</p>
+                        <p><strong>Sub Category:</strong> ${product.subCategory || 'N/A'}</p>
+                        <p><strong>Description:</strong> ${product.itemDescription || 'N/A'}</p>
+                        <p><strong>Cost:</strong> $${(product.cost || 0).toFixed(2)}</p>
+                        <p><strong>Sale Price:</strong> $${(product.salePrice || 0).toFixed(2)}</p>
+                        <p><strong>Trade Value (Cash):</strong> $${(product.tradeCash || 0).toFixed(2)}</p>
+                        <p><strong>Trade Value (Credit):</strong> $${(product.tradeCredit || 0).toFixed(2)}</p>
+                        <p><strong>Vendor:</strong> ${product.vendor || 'N/A'}</p>
+                        <p><strong>SKU:</strong> ${product.sku || 'N/A'}</p>
+                        <p><strong>UPC:</strong> ${product.upc || 'N/A'}</p>
+                        <p><strong>Condition:</strong> ${product.condition || 'N/A'}</p>
+                        <p><strong>Shipping Profile:</strong> ${product.shippingProfile || 'N/A'}</p>
+                    </div>
+                    <div class="flex flex-wrap gap-4">
+                        <button onclick="renderProductForm(state.inventoryModule.activeProduct, state.inventoryModule.activeProduct.id)" class="btn-futuristic py-2 px-6 rounded-lg text-lg">Edit</button>
+                        <button onclick="deleteProduct('${productId}')" class="bg-red-600 text-gray-200 py-2 px-6 rounded-lg text-lg transition-transform transform hover:scale-105">Delete</button>
+                        <button onclick="showModal('Image attachment feature not implemented yet.')" class="bg-blue-600 text-gray-200 py-2 px-6 rounded-lg text-lg transition-transform transform hover:scale-105">Attach Image</button>
+                        <button onclick="showModal('Label printing feature not implemented yet.')" class="bg-blue-600 text-gray-200 py-2 px-6 rounded-lg text-lg transition-transform transform hover:scale-105">Print Label</button>
+                    </div>
+                </div>
+            `;
+        }
+
+        async function deleteProduct(productId) {
+            const confirmed = await showModal('Are you sure you want to delete this product?', true);
+            if (confirmed) {
+                try {
+                    await deleteDoc(doc(db, `artifacts/${appId}/users/${userId}/inventory`, productId));
+                    showModal('Product deleted successfully!');
+                    goBack();
+                } catch (error) {
+                    console.error("Error deleting product: ", error);
+                    showModal('Error deleting product. See console for details.');
+                }
+            }
+        }
+
+        async function renderTradeCenterModule() {
+            pageContent.innerHTML = `
+                <div class="p-8 space-y-6">
+                    <div class="flex justify-between items-center">
+                        <h2 class="text-3xl font-bold text-purple-400">Trade Center</h2>
+                        <button onclick="goBack()" class="bg-gray-600 text-gray-200 py-2 px-4 rounded-full text-sm transition-transform transform hover:scale-105"><i class="fas fa-times"></i> Back</button>
+                    </div>
+                    <div class="flex flex-wrap gap-4 items-center">
+                        <button onclick="renderNewTradeForm()" class="btn-futuristic py-2 px-6 rounded-lg text-lg"><i class="fas fa-plus mr-2"></i>New Trade</button>
+                        <button onclick="showModal('Find trades feature not implemented yet.')" class="btn-futuristic py-2 px-6 rounded-lg text-lg">Find Trades</button>
+                        <button onclick="showModal('Trade reports feature not implemented yet.')" class="btn-futuristic py-2 px-6 rounded-lg text-lg">Reports</button>
+                    </div>
+                    <div id="trades-list" class="scroll-container h-96 overflow-y-auto">
+                        <p class="text-gray-400 text-center">Trade history will be displayed here...</p>
+                    </div>
+                </div>
+            `;
+        }
+
+        async function renderNewTradeForm() {
+            const transactionId = `TRD-${crypto.randomUUID().split('-')[0].toUpperCase()}`;
+            pageContent.innerHTML = `
+                <div class="p-8 space-y-6">
+                    <div class="flex justify-between items-center">
+                        <h2 class="text-3xl font-bold text-purple-400">New Trade</h2>
+                        <button onclick="goBack()" class="bg-gray-600 text-gray-200 py-2 px-4 rounded-full text-sm transition-transform transform hover:scale-105"><i class="fas fa-times"></i> Back</button>
+                    </div>
+                    <div class="bg-gray-800 glass-morphism p-6 rounded-xl space-y-4">
+                        <p class="text-xl"><strong>Transaction #:</strong> ${transactionId}</p>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                                <h3 class="text-lg font-bold mb-2">Customer Info</h3>
+                                <div id="trade-customer-section" class="flex items-center space-x-2">
+                                    <button onclick="showCustomerSearchModal()" class="btn-futuristic py-2 px-4 rounded-lg">Add Customer</button>
+                                </div>
+                            </div>
+                            <div>
+                                <h3 class="text-lg font-bold mb-2">Trade Details</h3>
+                                <label class="block mb-2">
+                                    <span class="text-gray-400">Trade Type</span>
+                                    <select id="tradeType" class="form-select mt-1 block w-full rounded-lg">
+                                        <option value="cash">Cash</option>
+                                        <option value="credit">In-Store Credit</option>
+                                    </select>
+                                </label>
+                                <label class="block">
+                                    <span class="text-gray-400">Employee PIN</span>
+                                    <input type="password" id="employeePin" class="form-input mt-1 block w-full rounded-lg">
+                                </label>
+                            </div>
+                        </div>
+                        <div class="mt-4">
+                            <h3 class="text-lg font-bold mb-2">Items</h3>
+                            <div id="trade-items-list" class="space-y-2">
+                                <p class="text-gray-400">No items added yet.</p>
+                            </div>
+                            <button onclick="showInventorySearchModal()" class="btn-futuristic py-2 px-4 rounded-lg mt-4">Add Item</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function showCustomerSearchModal() {
+            // Functionality to show a customer search modal
+            showModal('Customer search modal functionality not implemented yet.');
+        }
+
+        function showInventorySearchModal() {
+            // Functionality to show an inventory search modal
+            showModal('Inventory search modal functionality not implemented yet.');
+        }
+
+        function renderPlaceholder(moduleName) {
+            pageContent.innerHTML = `
+                <div class="p-8 text-center flex flex-col items-center justify-center h-full">
+                    <i class="fas fa-tools text-6xl text-gray-500 mb-4"></i>
+                    <h2 class="text-3xl font-bold text-gray-400">Module Under Construction</h2>
+                    <p class="text-xl text-gray-500 mt-2">The "${moduleName.replace('_', ' ').toUpperCase()}" module is not yet implemented.</p>
+                    <button onclick="goBack()" class="bg-gray-600 text-gray-200 py-2 px-6 rounded-lg text-lg transition-transform transform hover:scale-105 mt-8"><i class="fas fa-times mr-2"></i>Back</button>
+                </div>
+            `;
+        }
+        
+        // Expose global functions for HTML event handlers
+        window.navigateTo = navigateTo;
+        window.goBack = goBack;
+        window.renderDashboard = renderDashboard;
+        window.renderCustomersModule = renderCustomersModule;
+        window.renderCustomerForm = renderCustomerForm;
+        window.viewCustomer = viewCustomer;
+        window.deleteCustomer = deleteCustomer;
+        window.searchCustomers = searchCustomers;
+        window.renderInventoryModule = renderInventoryModule;
+        window.renderProductForm = renderProductForm;
+        window.viewProduct = viewProduct;
+        window.deleteProduct = deleteProduct;
+        window.searchInventory = searchInventory;
+        window.renderTradeCenterModule = renderTradeCenterModule;
+        window.renderNewTradeForm = renderNewTradeForm;
+        window.showCustomerSearchModal = showCustomerSearchModal;
+        window.showInventorySearchModal = showInventorySearchModal;
+        window.showModal = showModal;
+        window.renderPlaceholder = renderPlaceholder;
+
+        // Initial render after auth state is determined
+        window.onload = () => {
+             // The onAuthStateChanged listener will handle the initial render.
+        };
+    </script>
+
+    <!-- Main App Container -->
+    <div id="app" class="flex flex-col md:flex-row w-full h-full">
+        <!-- Dashboard Sidebar -->
+        <div class="bg-gray-900 md:w-64 p-4 md:p-8 flex flex-col justify-between">
+            <div>
+                <div class="flex items-center space-x-2 mb-8 justify-center">
+                    <img src="data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAYEBAUEBAMEFAUFBGAyKzEGBAYIChYKFgYKCgYKChgdGhwaHR0gJCUlKjEnOjs6Oio8YGE6QzkuKiQ6Ojg8MhwpMh//2wBDAQsLCwoUFgsWEwsYKzEOMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIy/wAARCAAoACgDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAD/xAAUEAEAAAAAAAAAAAAAAAAAAABQ/8QAFQEBAQAAAAAAAAAAAAAAAAAAAAD/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIRAxEAPwAUtQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP//Z" alt="Gridpoint Logo" class="h-10 w-10">
+                </div>
+                <nav class="space-y-4">
+                    <button onclick="navigateTo('dashboard')" class="w-full text-left p-4 rounded-lg flex items-center space-x-2 transition-colors hover:bg-purple-800">
+                        <i class="fas fa-home"></i>
+                        <span>Dashboard</span>
+                    </button>
+                    <button onclick="navigateTo('customers')" class="w-full text-left p-4 rounded-lg flex items-center space-x-2 transition-colors hover:bg-purple-800">
+                        <i class="fas fa-users"></i>
+                        <span>Customers</span>
+                    </button>
+                    <button onclick="navigateTo('inventory')" class="w-full text-left p-4 rounded-lg flex items-center space-x-2 transition-colors hover:bg-purple-800">
+                        <i class="fas fa-box-open"></i>
+                        <span>Inventory</span>
+                    </button>
+                    <button onclick="navigateTo('trade_center')" class="w-full text-left p-4 rounded-lg flex items-center space-x-2 transition-colors hover:bg-purple-800">
+                        <i class="fas fa-exchange-alt"></i>
+                        <span>Trade Center</span>
+                    </button>
+                    <button onclick="navigateTo('employee_center')" class="w-full text-left p-4 rounded-lg flex items-center space-x-2 transition-colors hover:bg-purple-800">
+                        <i class="fas fa-user-tie"></i>
+                        <span>Employee Center</span>
+                    </button>
+                    <button onclick="navigateTo('orders')" class="w-full text-left p-4 rounded-lg flex items-center space-x-2 transition-colors hover:bg-purple-800">
+                        <i class="fas fa-shopping-cart"></i>
+                        <span>Orders</span>
+                    </button>
+                    <button onclick="navigateTo('reports')" class="w-full text-left p-4 rounded-lg flex items-center space-x-2 transition-colors hover:bg-purple-800">
+                        <i class="fas fa-chart-line"></i>
+                        <span>Reports</span>
+                    </button>
+                </nav>
+            </div>
+            <div class="mt-8 text-sm text-gray-500 text-center" id="user-id-display">
+                Connecting...
+            </div>
+        </div>
+
+        <!-- Main Content Area -->
+        <main id="page-content" class="flex-1 overflow-auto p-4 md:p-8">
+            <div class="flex items-center justify-center h-full">
+                <p class="text-gray-400 text-lg">Initializing application...</p>
+            </div>
+        </main>
+    </div>
+
+    <!-- Modal for Alerts -->
+    <div id="app-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center modal">
+        <div class="bg-gray-900 glass-morphism p-8 rounded-2xl max-w-sm w-full space-y-4 text-center">
+            <p id="modal-text" class="text-lg font-bold text-gray-300"></p>
+            <div class="flex justify-center space-x-4">
+                <button id="modal-confirm" class="btn-futuristic py-2 px-6 rounded-lg hidden">OK</button>
+                <button id="modal-cancel" class="bg-gray-600 text-gray-200 py-2 px-6 rounded-lg hidden">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+</body>
+</html>
